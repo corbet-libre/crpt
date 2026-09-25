@@ -1,0 +1,18 @@
+[package]
+name = "crpt"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Crypto-payment and blockchain gate for cvld: wallet ownership, on-chain payments and staking"
+license = "LGPL-3.0-only WITH LGPL-3.0-linking-exception"
+repository = "https://github.com/corbet-foss/crpt"
+readme = "README.md"
+publish = false
+include = ["Cargo.toml", "src/**", "README.md", "LICENSE", "LICENSE.md", "LICENSES/LGPL-3.0-only.txt", "LICENSES/LGPL-3.0-linking-exception.txt", "LICENSES/GPL-3.0-only.txt"]
+
+[lib]
+crate-type = ["rlib"]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
