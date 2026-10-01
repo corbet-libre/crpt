@@ -5,7 +5,7 @@ Write all code comments and documentation in English.
 ## Product boundary
 
 - Crypto-payment and blockchain gate for cvld: wallet ownership, on-chain payments and staking.
-- Verifies wallet ownership, on-chain payments and stakes and returns an opaque gate proof with its trust anchor.
+- Verifies wallet ownership, on-chain payments and stakes and returns an opaque gate proof bound to its configured provider.
 - Never holds keys or custody of funds.
 - Wallet addresses never reach `cvld` beyond the opaque proof.
 - No own security primitives: a thin wrapper around the established best-practice library for the factor.
