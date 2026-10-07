@@ -18,6 +18,9 @@ cargo test --locked
 cargo check --locked --target wasm32-unknown-unknown
 rustup run nightly rustc --version
 NIGHTLY_CARGO="$(rustup which --toolchain nightly cargo)"
+NIGHTLY_RUSTC="$(rustup which --toolchain nightly rustc)"
+export RUSTC="$NIGHTLY_RUSTC" CARGO="$NIGHTLY_CARGO" RUSTUP_TOOLCHAIN=nightly
+export PATH="$(dirname "$NIGHTLY_RUSTC"):$PATH"
 "$NIGHTLY_CARGO" llvm-cov --version
 # Bug 2 isolation: coverage data must not reuse the shared cargo target
 # across jobs (stale checkout paths fail the next gate); scope the
