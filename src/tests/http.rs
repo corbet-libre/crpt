@@ -92,6 +92,7 @@ fn production_transport_rejects_untrusted_url_shapes_and_implicit_limits() {
     for url in [
         "http://example.test",
         "https://user:pass@example.test",
+        "https://:pass@example.test",
         "https://example.test?key=value",
         "https://example.test#fragment",
         "file:///tmp/example",
@@ -133,4 +134,20 @@ fn production_transport_rejects_untrusted_url_shapes_and_implicit_limits() {
         )
         .is_ok()
     );
+}
+
+#[test]
+fn local_fixture_transport_is_restricted_to_loopback_http() {
+    for url in ["http://localhost", "file:///tmp/example"] {
+        assert!(
+            HttpFacilitator::build(
+                Url::parse(url).unwrap(),
+                HeaderMap::new(),
+                Duration::from_secs(1),
+                1024,
+                true
+            )
+            .is_err()
+        );
+    }
 }

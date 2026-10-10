@@ -12,6 +12,9 @@ struct Remote {
     valid: bool,
     supported: bool,
     fail: bool,
+    fail_supported: bool,
+    fail_verify: bool,
+    kind: (u8, String, String),
 }
 impl Default for Remote {
     fn default() -> Self {
@@ -22,6 +25,9 @@ impl Default for Remote {
             valid: true,
             supported: true,
             fail: false,
+            fail_supported: false,
+            fail_verify: false,
+            kind: (2, "exact".into(), "eip155:8453".into()),
         }
     }
 }
@@ -32,6 +38,9 @@ impl Facilitator for Remote {
             .lock()
             .unwrap()
             .push(serde_json::from_str(request.as_str()).unwrap());
+        if self.fail_verify {
+            return Err(Error::Rejected);
+        }
         Ok(proto::VerifyResponse(
             serde_json::json!({"isValid":self.valid,"payer":"PRIVATE-PAYER"}),
         ))
@@ -45,12 +54,15 @@ impl Facilitator for Remote {
         }
     }
     async fn supported(&self) -> Result<proto::SupportedResponse> {
+        if self.fail_supported {
+            return Err(Error::Rejected);
+        }
         Ok(proto::SupportedResponse {
             kinds: if self.supported {
                 vec![proto::SupportedPaymentKind {
-                    x402_version: 2,
-                    scheme: "exact".into(),
-                    network: "eip155:8453".into(),
+                    x402_version: self.kind.0,
+                    scheme: self.kind.1.clone(),
+                    network: self.kind.2.clone(),
                     extra: None,
                 }]
             } else {
@@ -338,9 +350,47 @@ fn http_headers_roundtrip_through_standard_v2_encoding() {
     );
     assert!(payment_signature(&encoded, 1).is_err());
     assert!(payment_signature("%%%", 10).is_err());
+    offer.resource = None;
+    assert!(payment_required(&offer).is_err());
     offer.accepts.clear();
     assert!(payment_required(&offer).is_err());
     assert_eq!(PAYMENT_REQUIRED, "PAYMENT-REQUIRED");
     assert_eq!(PAYMENT_SIGNATURE, "PAYMENT-SIGNATURE");
     assert_eq!(PAYMENT_RESPONSE, "PAYMENT-RESPONSE");
+}
+
+#[tokio::test]
+async fn unavailable_or_mismatched_facilitators_cannot_settle() {
+    for remote in [
+        Remote {
+            fail_supported: true,
+            ..Default::default()
+        },
+        Remote {
+            fail_verify: true,
+            ..Default::default()
+        },
+        Remote {
+            kind: (1, "exact".into(), "eip155:8453".into()),
+            ..Default::default()
+        },
+        Remote {
+            kind: (2, "other".into(), "eip155:8453".into()),
+            ..Default::default()
+        },
+        Remote {
+            kind: (2, "exact".into(), "eip155:1".into()),
+            ..Default::default()
+        },
+    ] {
+        let calls = remote.calls.clone();
+        let adapter = X402::new("crypto".into(), remote, 16384).unwrap();
+        assert!(
+            adapter
+                .execute(&request("x402.settle"), "key", None)
+                .await
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
 }

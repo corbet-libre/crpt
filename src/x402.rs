@@ -112,6 +112,9 @@ impl<F: Facilitator + Send + Sync> X402<F> {
 }
 
 impl<F: Facilitator + Send + Sync> Adapter for X402<F> {
+    fn max_input_bytes(&self) -> usize {
+        self.max_input_bytes
+    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             id: self.id.clone(),
@@ -156,9 +159,10 @@ impl<F: Facilitator + Send + Sync> Adapter for X402<F> {
             // this weaker fact permits its resource to execute before settlement.
             let claim = serde_json::to_vec(&(
                 "x402.authorization.v2",
-                serde_json::from_str::<Value>(wire.as_str()).map_err(|_| Error::Invalid)?,
+                serde_json::from_str::<Value>(wire.as_str())
+                    .expect("upstream constructed valid JSON"),
             ))
-            .map_err(|_| Error::Invalid)?;
+            .expect("JSON values serialize to a byte vector");
             return Ok(Observation {
                 state: State::Verified,
                 valid_until: Some(request.expires_at),
@@ -236,7 +240,7 @@ fn settled(receipt: Receipt) -> Result<Observation> {
     Ok(Observation {
         claim: Some(Private::new(
             serde_json::to_vec(&("x402.settlement.v2", &receipt.network, &receipt.transaction))
-                .map_err(|_| Error::Invalid)?,
+                .expect("string tuples serialize to a byte vector"),
         )),
         continuation: Some(Private::new(
             serde_json::to_vec(&receipt).map_err(|_| Error::Invalid)?,

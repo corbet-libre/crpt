@@ -38,7 +38,6 @@ impl HttpFacilitator {
         let scheme_ok = base.scheme() == "https"
             || (local_fixture && base.scheme() == "http" && base.host_str() == Some("127.0.0.1"));
         if !scheme_ok
-            || base.host_str().is_none()
             || !base.username().is_empty()
             || base.password().is_some()
             || base.query().is_some()
@@ -57,7 +56,7 @@ impl HttpFacilitator {
             .retry(reqwest::retry::never())
             .no_proxy()
             .build()
-            .map_err(|_| Error::Invalid)?;
+            .map_err(transport_error)?;
         Ok(Self {
             base,
             client,
@@ -75,7 +74,7 @@ impl HttpFacilitator {
         if let Some(body) = body {
             request = request.json(body);
         }
-        let mut response = request.send().await.map_err(|_| Error::Rejected)?;
+        let mut response = request.send().await.map_err(transport_error)?;
         if !response.status().is_success()
             || response
                 .content_length()
@@ -84,7 +83,7 @@ impl HttpFacilitator {
             return Err(Error::Rejected);
         }
         let mut bytes = Zeroizing::new(Vec::new());
-        while let Some(chunk) = response.chunk().await.map_err(|_| Error::Rejected)? {
+        while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
             if bytes.len().saturating_add(chunk.len()) > self.max_response_bytes {
                 return Err(Error::Rejected);
             }
@@ -92,6 +91,10 @@ impl HttpFacilitator {
         }
         serde_json::from_slice(&bytes).map_err(|_| Error::Rejected)
     }
+}
+
+fn transport_error(_: reqwest::Error) -> Error {
+    Error::Rejected
 }
 
 impl Facilitator for HttpFacilitator {
