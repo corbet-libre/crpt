@@ -14,7 +14,7 @@ touch "$GITHUB_PATH"
 cargo update
 cp Cargo.lock "$ARTIFACT_ROOT/Cargo.lock"
 python3 .github/check-first-party.py
-cargo deny --all-features check advisories
+cargo deny --all-features check --warn unmaintained advisories
 cargo fmt --all -- --check
 cargo clippy --locked --all-features --all-targets -- -D warnings
 cargo test --locked --all-features

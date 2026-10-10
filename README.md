@@ -81,3 +81,9 @@ additional currencies do not require changing the core.
 
 Tests use local HTTP fixtures and external-provider fixtures only. No live chain,
 wallet keys or payment credentials are used.
+
+The advisory check denies known vulnerabilities and reports maintenance notices
+as warnings. The current x402-types → alloy-primitives graph still uses `paste`
+for compile-time token generation; RustSec marks that macro crate unmaintained
+([RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436.html)).
+This remains visible in CI rather than introducing a private upstream fork.
