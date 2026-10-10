@@ -1,19 +1,14 @@
 # Agent instructions
 
-Write all code comments and documentation in English.
-
-## Product boundary
-
-- Crypto-payment and blockchain gate for cvld: wallet ownership, on-chain payments and staking.
-- Verifies wallet ownership, on-chain payments and stakes and returns an opaque gate proof bound to its configured provider.
-- Never holds keys or custody of funds.
-- Wallet addresses never reach `cvld` beyond the opaque proof.
-- No own security primitives: a thin wrapper around the established best-practice library for the factor.
-- This crate is LGPL-3.0-only WITH LGPL-3.0-linking-exception. Do not add implementation code available only under the full GPL or AGPL.
-- Tests use fixtures only; no live chain or node calls.
-
-## Quality boundary
-
-- `cargo fmt --check`, `cargo clippy --all-targets` (no warnings),
-  `cargo test` — all green before every commit. No local workstation
-  builds; use GHA, Crow as fallback.
+- Implement crypto payment adapters using cpmt's shared execution contract.
+  Callers own commercial policy. Keep platform, network and currency support in
+  adapters; x402 is a protocol adapter, not a preferred cryptocurrency.
+- Preserve the information boundary documented in README.md. No custody, private
+  wallet keys, raw gate evidence retention or member-to-member transfers.
+- Reuse maintained upstream SDKs/types; no own cryptographic primitives.
+  Use semver ranges and first-party `branch = "main"`, not exact manifest pins.
+- LGPL-3.0-only WITH LGPL-3.0-linking-exception; no GPL/AGPL-only dependencies.
+- Fixtures only. No live billing, chain calls, spending or provider registration.
+- Workstations edit/format; Crow compiles and tests committed candidates.
+  Do not claim completion before required checks pass. Forgejo is primary.
+- All comments/docs are English. Preserve source coverage and privacy checks.

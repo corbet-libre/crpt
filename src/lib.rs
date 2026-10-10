@@ -1,5 +1,7 @@
-//! Crypto-payment and blockchain admission gate for cvld.
-//!
-//! Placeholder crate. The interface is not designed yet; see
-//! the README for the intended scope.
+//! Crypto payment adapters sharing cpmt's execution and information boundary.
 #![forbid(unsafe_code)]
+
+pub use cpmt::payments;
+#[cfg(feature = "http")]
+pub mod http;
+pub mod x402;
