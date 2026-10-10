@@ -94,6 +94,16 @@ impl HttpFacilitator {
         }
         Ok(ProviderReply {
             phase: path,
+            headers: Some(Private::new(
+                serde_json::to_vec(
+                    &response
+                        .headers()
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), value.as_bytes()))
+                        .collect::<Vec<_>>(),
+                )
+                .expect("header fields serialize"),
+            )),
             http_status: Some(response.status().as_u16()),
             payload: Private::new(std::mem::take(&mut *bytes)),
         })

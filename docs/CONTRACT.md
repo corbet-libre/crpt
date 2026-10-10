@@ -32,7 +32,7 @@ responses through redacted, transient `ProviderReply` buffers. Arbitrary JSON
 cannot construct a proof. `facilitator::Sdk` reuses any upstream `Facilitator`
 and relays complete available typed responses; fields already discarded by an
 SDK cannot be recovered. `HttpFacilitator` implements the richer transport seam
-and preserves unknown fields and non-success response bodies within its explicit
+and preserves available response headers, unknown fields and non-success bodies within its explicit
 size bound. Local transport/configuration diagnostics stay redacted.
 
 Simulation uses the same `cfbk` planning, bound terms and fallback classification

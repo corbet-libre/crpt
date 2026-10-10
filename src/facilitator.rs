@@ -20,6 +20,7 @@ impl<T: serde::Serialize> Exchange<T> {
             .ok()
             .map(|value| ProviderReply {
                 phase,
+                headers: None,
                 http_status: None,
                 payload: Private::new(
                     serde_json::to_vec(value).expect("upstream response serializes"),

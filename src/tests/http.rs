@@ -165,6 +165,9 @@ async fn detailed_transport_keeps_extensions_and_failed_bodies_private_per_call(
         HttpFacilitator::build(url, HeaderMap::new(), Duration::from_secs(2), 4096, true).unwrap();
     let supported = client.supported_details().await;
     assert!(supported.result.is_ok());
+    let headers: Vec<(String, Vec<u8>)> =
+        serde_json::from_slice(supported.upstream[0].headers.as_ref().unwrap().expose()).unwrap();
+    assert!(headers.iter().any(|(name, _)| name == "content-length"));
     assert!(
         String::from_utf8_lossy(supported.upstream[0].payload.expose())
             .contains("unknown_extension")
