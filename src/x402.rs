@@ -111,7 +111,6 @@ impl<F: Facilitator + Send + Sync> X402<F> {
     }
 }
 
-#[async_trait]
 impl<F: Facilitator + Send + Sync> Adapter for X402<F> {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
