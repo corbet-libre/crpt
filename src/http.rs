@@ -34,7 +34,7 @@ impl HttpFacilitator {
     }
     fn build(
         mut base: Url,
-        headers: HeaderMap,
+        mut headers: HeaderMap,
         timeout: Duration,
         max_response_bytes: usize,
         local_fixture: bool,
@@ -52,6 +52,9 @@ impl HttpFacilitator {
             return Err(Error::Invalid);
         }
         base.set_path(&format!("{}/", base.path().trim_end_matches('/')));
+        for value in headers.values_mut() {
+            value.set_sensitive(true);
+        }
         let client = Client::builder()
             .default_headers(headers)
             .timeout(timeout)

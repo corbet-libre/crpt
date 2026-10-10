@@ -10,6 +10,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
+use tracing::instrument::WithSubscriber;
 use x402_types::proto::{self, v2};
 
 /// HTTP response header for a base64-encoded x402 offer.
@@ -184,7 +185,12 @@ impl<F: Transport> Adapter for X402<F> {
             return Err(Error::Invalid);
         }
         let (wire, requirements) = self.wire(request)?;
-        let supported = self.facilitator.supported_details().await;
+        request.check(&self.id, self.mode)?;
+        let supported = self
+            .facilitator
+            .supported_details()
+            .with_subscriber(tracing::subscriber::NoSubscriber::default())
+            .await;
         let mut upstream = supported.upstream;
         let supported = match supported.result {
             Ok(value) => value,
@@ -205,7 +211,17 @@ impl<F: Transport> Adapter for X402<F> {
                 ..Observation::fact(State::Failed)
             });
         }
-        let verified = self.facilitator.verify_details(&wire).await;
+        if request.check(&self.id, self.mode).is_err() {
+            return Ok(Observation {
+                upstream,
+                ..Observation::fact(State::Unknown)
+            });
+        }
+        let verified = self
+            .facilitator
+            .verify_details(&wire)
+            .with_subscriber(tracing::subscriber::NoSubscriber::default())
+            .await;
         upstream.extend(verified.upstream);
         let verified = match verified.result {
             Ok(value) => value,
@@ -229,7 +245,10 @@ impl<F: Transport> Adapter for X402<F> {
             observation.upstream = upstream;
             observation.satisfies_terms = true;
             if let Some(identity) = &self.identity {
-                let authorization = match identity.identify(&wire) {
+                let authorization = match tracing::subscriber::with_default(
+                    tracing::subscriber::NoSubscriber::default(),
+                    || identity.identify(&wire),
+                ) {
                     Ok(value) if !value.identity.expose().is_empty() => value,
                     _ => {
                         return Ok(Observation {
@@ -250,7 +269,17 @@ impl<F: Transport> Adapter for X402<F> {
             }
             return Ok(observation);
         }
-        let exchange = self.facilitator.settle_details(&wire).await;
+        if request.check(&self.id, self.mode).is_err() {
+            return Ok(Observation {
+                upstream,
+                ..Observation::fact(State::Unknown)
+            });
+        }
+        let exchange = self
+            .facilitator
+            .settle_details(&wire)
+            .with_subscriber(tracing::subscriber::NoSubscriber::default())
+            .await;
         upstream.extend(exchange.upstream);
         let reply = match exchange.result {
             Ok(reply) => reply.0,
@@ -317,8 +346,10 @@ impl<F: Transport> Adapter for X402<F> {
         let receipt: Receipt =
             serde_json::from_slice(continuation.ok_or(Error::Unsupported)?.expose())
                 .map_err(|_| Error::Invalid)?;
+        request.check(&self.id, self.mode)?;
         let read = reader
             .settled(&receipt.network, &receipt.transaction)
+            .with_subscriber(tracing::subscriber::NoSubscriber::default())
             .await?;
         let mut result = if read.settled {
             settled(receipt)?

@@ -18,6 +18,7 @@ struct Remote {
     fail_supported: bool,
     fail_verify: bool,
     kind: (u8, String, String),
+    advance: Option<(Arc<std::sync::atomic::AtomicU64>, bool)>,
 }
 impl Default for Remote {
     fn default() -> Self {
@@ -31,12 +32,17 @@ impl Default for Remote {
             fail_supported: false,
             fail_verify: false,
             kind: (2, "exact".into(), "eip155:8453".into()),
+            advance: None,
         }
     }
 }
 impl Facilitator for Remote {
     type Error = Error;
     async fn verify(&self, request: &proto::VerifyRequest) -> Result<proto::VerifyResponse> {
+        tracing::info!(private_payer = "PRIVATE-PAYER", "fixture SDK response");
+        if let Some((clock, false)) = &self.advance {
+            clock.store(100, Ordering::SeqCst);
+        }
         self.requests
             .lock()
             .unwrap()
@@ -57,6 +63,9 @@ impl Facilitator for Remote {
         }
     }
     async fn supported(&self) -> Result<proto::SupportedResponse> {
+        if let Some((clock, true)) = &self.advance {
+            clock.store(100, Ordering::SeqCst);
+        }
         if self.fail_supported {
             return Err(Error::Rejected);
         }
@@ -90,7 +99,8 @@ async fn settlement_uses_trusted_terms_and_reduces_every_provider_response() {
     let remote = Remote::default();
     let calls = remote.calls.clone();
     let requests = remote.requests.clone();
-    let mut payments = Payments::new(MemoryJournal::default(), [9; 32]).unwrap();
+    let mut payments =
+        Payments::new(MemoryJournal::default(), [9; 32], std::sync::Arc::new(|| 0)).unwrap();
     payments
         .register(Arc::new(
             configured("crypto".into(), remote, 16384).unwrap(),
@@ -443,7 +453,8 @@ async fn unsigned_metadata_cannot_multiply_verification_receipts_or_extend_autho
         if canonical {
             adapter = adapter.with_authorization_identity(Arc::new(SchemeIdentity));
         }
-        let mut payments = Payments::new(MemoryJournal::default(), [9; 32]).unwrap();
+        let mut payments =
+            Payments::new(MemoryJournal::default(), [9; 32], std::sync::Arc::new(|| 0)).unwrap();
         payments.register(Arc::new(adapter)).unwrap();
         let mut original = None;
         for variant in 0..4 {
@@ -488,10 +499,9 @@ async fn unsigned_metadata_cannot_multiply_verification_receipts_or_extend_autho
             let mut foreign = request("x402.verify");
             foreign.id = [5; 32];
             foreign.binding.subject = "other-member".into();
-            assert!(matches!(
-                payments.execute(&foreign, 1).await,
-                Err(Error::Conflict)
-            ));
+            let conflict = payments.execute(&foreign, 1).await.unwrap();
+            assert_eq!(conflict.commit_error, Some(Error::Conflict));
+            assert_eq!(conflict.outcome.state(), State::Unknown);
         }
     }
     let adapter = configured("crypto".into(), Remote::default(), 16384)
@@ -521,7 +531,12 @@ impl<F: Transport> X402<F> {
         key: &str,
         previous: Option<&Private>,
     ) -> Result<Observation> {
-        let auth = Dispatch::new(request, crate::test_support::permit(request, self.mode), 0)?;
+        let auth = Dispatch::new(
+            request,
+            crate::test_support::permit(request, self.mode),
+            0,
+            std::sync::Arc::new(|| 0),
+        )?;
         Adapter::execute(self, &auth, key, previous).await
     }
     async fn observe(&self, operation: &str, previous: Option<&Private>) -> Result<Observation> {
@@ -531,6 +546,7 @@ impl<F: Transport> X402<F> {
             &request,
             crate::test_support::permit(&request, self.mode),
             0,
+            std::sync::Arc::new(|| 0),
         )?;
         Adapter::observe(self, &auth, previous).await
     }
@@ -539,7 +555,8 @@ impl<F: Transport> X402<F> {
 #[tokio::test]
 async fn complete_results_are_explicit_and_sandbox_cannot_grant_paid_access() {
     for mode in [Mode::Production, Mode::Sandbox] {
-        let mut payments = Payments::new(MemoryJournal::default(), [9; 32]).unwrap();
+        let mut payments =
+            Payments::new(MemoryJournal::default(), [9; 32], std::sync::Arc::new(|| 0)).unwrap();
         payments
             .register(Arc::new(
                 X402::new("crypto".into(), Sdk(Remote::default()), 16384, mode).unwrap(),
@@ -599,6 +616,7 @@ async fn complete_results_are_explicit_and_sandbox_cannot_grant_paid_access() {
         &request,
         crate::test_support::permit(&request, Mode::Sandbox),
         1,
+        std::sync::Arc::new(|| 0),
     )
     .unwrap();
     assert!(
@@ -612,6 +630,7 @@ async fn complete_results_are_explicit_and_sandbox_cannot_grant_paid_access() {
         &read,
         crate::test_support::permit(&read, Mode::Production),
         1,
+        std::sync::Arc::new(|| 0),
     )
     .unwrap();
     assert!(
@@ -623,7 +642,82 @@ async fn complete_results_are_explicit_and_sandbox_cannot_grant_paid_access() {
         &request,
         crate::test_support::permit(&request, Mode::Production),
         1,
+        std::sync::Arc::new(|| 0),
     )
     .unwrap();
     assert!(Adapter::observe(&adapter, &wrong, None).await.is_err());
+}
+
+#[tokio::test]
+async fn delayed_facilitator_phases_cannot_use_an_expired_quote_for_the_next_call() {
+    for before_verify in [true, false] {
+        let now = Arc::new(std::sync::atomic::AtomicU64::new(1));
+        let clock = now.clone();
+        let remote = Remote {
+            advance: Some((now, before_verify)),
+            ..Default::default()
+        };
+        let calls = remote.calls.clone();
+        let seen = remote.requests.clone();
+        let mut payments = Payments::new(
+            MemoryJournal::default(),
+            [9; 32],
+            Arc::new(move || clock.load(Ordering::SeqCst)),
+        )
+        .unwrap();
+        payments
+            .register(Arc::new(
+                configured("crypto".into(), remote, 16384).unwrap(),
+            ))
+            .unwrap();
+        let request = request("x402.settle");
+        let result = payments
+            .dispatch_with_output(
+                &request,
+                crate::test_support::permit(&request, Mode::Production),
+                1,
+                crate::details::Disclosure::Complete,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.outcome.state(), State::Unknown);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(seen.lock().unwrap().len(), usize::from(!before_verify));
+        assert_eq!(result.upstream.len(), if before_verify { 1 } else { 2 });
+    }
+}
+struct TraceCounter(Arc<AtomicUsize>);
+impl tracing::Subscriber for TraceCounter {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+#[tokio::test]
+async fn configured_sdk_traces_stay_inside_the_private_payment_boundary() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let seen = count.clone();
+    async move {
+        tracing::info!("outside boundary");
+        let adapter = configured("crypto".into(), Remote::default(), 16384).unwrap();
+        adapter
+            .execute(&request("x402.settle"), "key", None)
+            .await
+            .unwrap();
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
+    }
+    .with_subscriber(TraceCounter(count))
+    .await;
 }

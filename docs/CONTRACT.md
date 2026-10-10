@@ -44,3 +44,16 @@ Owned code forbids unsafe Rust. Dependencies use current compatible ranges and
 first-party main branches; lockfiles record the tested graph. Integration tests
 use maintained protocol types and inert loopback fixtures. Live facilitators,
 chain transactions and sandbox sessions are not run or qualified by those tests.
+
+The injected trusted `cost::Clock` must advance across awaited work. Each actual
+facilitator/read phase rechecks the effective deadline. If expiry occurs after a
+phase, return available private replies as Unknown and retain fee exposure;
+never begin a later phase with the old quote. SDK tracing is suppressed within
+these calls; injected HTTP authentication headers are sensitive.
+
+Unexpected authenticated fees survive in the shared Reservation violation field.
+A failed final state commit returns `Execution::commit_error`, Unknown and
+available explicit private details without proof or member handover. Host
+reconciliation must preserve that charge knowledge before more spending in the
+affected budget scope. See the [shared payment contract](https://git.corbet.ch/corbet-foss/cpmt/src/branch/main/docs/CONTRACT.md)
+and [candidate catalogue](CATALOGUE.md).

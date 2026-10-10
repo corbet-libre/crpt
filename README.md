@@ -105,7 +105,7 @@ exposes the fiat profiles; availability does not decide what the host offers.
 
 ## Cost authorization and modes
 
-Read the [domain contract](docs/CONTRACT.md) before integration. Configure each
+Read the [domain contract](docs/CONTRACT.md) and [integration catalogue](docs/CATALOGUE.md) before integration. Configure each
 adapter with `Mode::Production` or `Mode::Sandbox`; the host owns endpoint/account
 selection. Build an inert preview with `Payments::preview`, a trusted tariff and
 its provenance/expiry, then use `cfbk` (re-exported as `cost`) to obtain a move-only
@@ -124,3 +124,15 @@ use it directly as `X402`'s response-bearing transport to preserve complete HTTP
 results through the costed payment boundary. Wrapping it in `Sdk` intentionally
 has the upstream trait's typed-data limits. No live provider/chain/sandbox call is
 part of the test suite; fixture success does not qualify a production account.
+
+The host supplies a live `cost::Clock` to `Payments::new`. The adapter checks fresh
+time before discovery, verification, settlement and receipt observation. If an
+earlier phase exhausts the deadline, later phases are not called; explicit private
+results already received remain available with an Unknown outcome. The quote must
+cover the entire operation. SDK futures run with tracing suppressed, and injected
+HTTP headers are marked sensitive.
+
+The shared executor preserves unexpected authenticated fees in `cost.violation`
+and cascade `charge_violation`, keeping them distinct from the original maximum.
+Failed final caller-state writes return `commit_error` and Unknown with explicit
+private reconciliation data; they cannot produce proof or automatic fallback.
