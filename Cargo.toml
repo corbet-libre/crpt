@@ -16,6 +16,7 @@ crate-type = ["rlib"]
 [features]
 default = []
 http = ["dep:reqwest", "dep:url"]
+hosted = ["cpmt/providers"]
 
 [dependencies]
 cpmt = { git = "https://git.corbet.ch/corbet-foss/cpmt", branch = "main" }

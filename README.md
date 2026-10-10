@@ -91,3 +91,12 @@ as warnings. The current x402-types → alloy-primitives graph still uses `paste
 for compile-time token generation; RustSec marks that macro crate unmaintained
 ([RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436.html)).
 This remains visible in CI rather than introducing a private upstream fork.
+
+Enable `hosted` for BTCPay Server Greenfield invoices and CoinGate hosted orders:
+`crpt::hosted::{Rest, Provider, Limits}` reuses cpmt's implementation and its
+journal/gate contract. Select `Provider::Btcpay` or `Provider::CoinGate`; inject
+the operator's credential and explicit instance/store or sandbox configuration.
+[Supported operations and limits](https://git.corbet.ch/corbet-foss/cpmt/src/branch/main/docs/PROVIDERS.md)
+include read-only reconciliation, private checkout-link handoff, amount checks,
+and refusal to treat manual BTCPay marking as settlement. The dependency also
+exposes the fiat profiles; availability does not decide what the host offers.
