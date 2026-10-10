@@ -163,7 +163,9 @@ async fn detailed_transport_keeps_extensions_and_failed_bodies_private_per_call(
     ]).await;
     let client =
         HttpFacilitator::build(url, HeaderMap::new(), Duration::from_secs(2), 4096, true).unwrap();
-    let supported = client.supported_details().await;
+    let check = || Ok(());
+    let authorization = DispatchGuard::new(&check);
+    let supported = client.supported_details(&authorization).await;
     assert!(supported.result.is_ok());
     let headers: Vec<(String, Vec<u8>)> =
         serde_json::from_slice(supported.upstream[0].headers.as_ref().unwrap().expose()).unwrap();
@@ -176,18 +178,79 @@ async fn detailed_transport_keeps_extensions_and_failed_bodies_private_per_call(
         serde_json::from_str(r#"{"x402Version":2,"paymentPayload":{},"paymentRequirements":{}}"#)
             .unwrap();
     assert_eq!(
-        client.verify_details(&request).await.result.unwrap().0["unknown_verify"],
+        client
+            .verify_details(&request, &authorization)
+            .await
+            .result
+            .unwrap()
+            .0["unknown_verify"],
         "full"
     );
     assert_eq!(
-        client.settle_details(&request).await.result.unwrap().0["unknown_settle"],
+        client
+            .settle_details(&request, &authorization)
+            .await
+            .result
+            .unwrap()
+            .0["unknown_settle"],
         "full"
     );
     for expected in [b"private-invalid-json".as_slice(), b"private-error"] {
-        let exchange = client.supported_details().await;
+        let exchange = client.supported_details(&authorization).await;
         assert_eq!(exchange.result.unwrap_err(), Error::Rejected);
         assert_eq!(exchange.upstream[0].payload.expose(), expected);
         assert!(!format!("{:?}", exchange.upstream[0]).contains("private"));
     }
     assert_eq!(calls.await.unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn expired_authorization_is_refused_at_the_concrete_http_send_edge() {
+    use crate::{
+        cost::{Dispatch, Mode},
+        payments::{Action, Binding, Instruction},
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+    let client =
+        HttpFacilitator::build(url, HeaderMap::new(), Duration::from_secs(1), 1024, true).unwrap();
+    let request = Instruction {
+        kind: Action::Execute,
+        id: [1; 32],
+        parent: None,
+        adapter: "crypto".into(),
+        operation: "x402.settle".into(),
+        binding: Binding {
+            scope: "scope".into(),
+            subject: "member".into(),
+            action: "pay".into(),
+        },
+        expires_at: 100,
+        terms: Private::new(vec![]),
+        evidence: Private::new(vec![]),
+    };
+    let now = Arc::new(AtomicU64::new(0));
+    let clock = now.clone();
+    let dispatch = Dispatch::new(
+        &request,
+        crate::test_support::permit(&request, Mode::Production),
+        0,
+        Arc::new(move || clock.load(Ordering::SeqCst)),
+    )
+    .unwrap();
+    let check = || dispatch.check("crypto", Mode::Production);
+    let authorization = DispatchGuard::new(&check);
+    now.store(100, Ordering::SeqCst);
+    let exchange = client.supported_details(&authorization).await;
+    assert_eq!(exchange.result.unwrap_err(), Error::Expired);
+    assert!(exchange.upstream.is_empty());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), listener.accept())
+            .await
+            .is_err()
+    );
 }

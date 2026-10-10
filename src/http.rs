@@ -3,7 +3,7 @@
 use crate::payments::{Error, Private, Result};
 use crate::{
     details::ProviderReply,
-    facilitator::{Exchange, Transport},
+    facilitator::{DispatchGuard, Exchange, Transport},
 };
 use reqwest::{Client, Method, header::HeaderMap};
 use serde::{Serialize, de::DeserializeOwned};
@@ -75,11 +75,15 @@ impl HttpFacilitator {
         method: Method,
         path: &'static str,
         body: Option<&T>,
+        authorization: Option<&DispatchGuard<'_>>,
     ) -> Result<ProviderReply> {
         let url = self.base.join(path).map_err(|_| Error::Invalid)?;
         let mut request = self.client.request(method, url);
         if let Some(body) = body {
             request = request.json(body);
+        }
+        if let Some(authorization) = authorization {
+            authorization.check()?;
         }
         let mut response = request.send().await.map_err(transport_error)?;
         if response
@@ -116,8 +120,9 @@ impl HttpFacilitator {
         method: Method,
         path: &'static str,
         body: Option<&T>,
+        authorization: Option<&DispatchGuard<'_>>,
     ) -> Exchange<R> {
-        match self.send(method, path, body).await {
+        match self.send(method, path, body, authorization).await {
             Ok(reply) => {
                 let result = if reply.http_status.is_some_and(|s| (200..300).contains(&s)) {
                     serde_json::from_slice(reply.payload.expose()).map_err(|_| Error::Rejected)
@@ -144,17 +149,17 @@ fn transport_error(_: reqwest::Error) -> Error {
 impl Facilitator for HttpFacilitator {
     type Error = Error;
     async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse> {
-        self.exchange(Method::POST, "verify", Some(request))
+        self.exchange(Method::POST, "verify", Some(request), None)
             .await
             .result
     }
     async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse> {
-        self.exchange(Method::POST, "settle", Some(request))
+        self.exchange(Method::POST, "settle", Some(request), None)
             .await
             .result
     }
     async fn supported(&self) -> Result<SupportedResponse> {
-        self.exchange::<(), _>(Method::GET, "supported", None)
+        self.exchange::<(), _>(Method::GET, "supported", None, None)
             .await
             .result
     }
@@ -165,13 +170,27 @@ impl Facilitator for HttpFacilitator {
 mod tests;
 
 impl Transport for HttpFacilitator {
-    async fn supported_details(&self) -> Exchange<SupportedResponse> {
-        self.exchange::<(), _>(Method::GET, "supported", None).await
+    async fn supported_details(
+        &self,
+        authorization: &DispatchGuard<'_>,
+    ) -> Exchange<SupportedResponse> {
+        self.exchange::<(), _>(Method::GET, "supported", None, Some(authorization))
+            .await
     }
-    async fn verify_details(&self, request: &VerifyRequest) -> Exchange<VerifyResponse> {
-        self.exchange(Method::POST, "verify", Some(request)).await
+    async fn verify_details(
+        &self,
+        request: &VerifyRequest,
+        authorization: &DispatchGuard<'_>,
+    ) -> Exchange<VerifyResponse> {
+        self.exchange(Method::POST, "verify", Some(request), Some(authorization))
+            .await
     }
-    async fn settle_details(&self, request: &SettleRequest) -> Exchange<SettleResponse> {
-        self.exchange(Method::POST, "settle", Some(request)).await
+    async fn settle_details(
+        &self,
+        request: &SettleRequest,
+        authorization: &DispatchGuard<'_>,
+    ) -> Exchange<SettleResponse> {
+        self.exchange(Method::POST, "settle", Some(request), Some(authorization))
+            .await
     }
 }

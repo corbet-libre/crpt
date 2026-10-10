@@ -271,7 +271,13 @@ async fn settlement_timeout_failure_and_wrong_network_never_prove_success() {
 struct Reader(bool);
 #[async_trait]
 impl ReceiptReader for Reader {
-    async fn settled(&self, network: &str, transaction: &str) -> Result<ReceiptObservation> {
+    async fn settled(
+        &self,
+        network: &str,
+        transaction: &str,
+        authorization: &DispatchGuard<'_>,
+    ) -> Result<ReceiptObservation> {
+        authorization.check()?;
         assert_eq!(network, "eip155:8453");
         assert_eq!(transaction, "fixture-tx");
         Ok(ReceiptObservation {
@@ -720,4 +726,122 @@ async fn configured_sdk_traces_stay_inside_the_private_payment_boundary() {
     }
     .with_subscriber(TraceCounter(count))
     .await;
+}
+
+struct Queued {
+    remote: Sdk<Remote>,
+    now: Arc<std::sync::atomic::AtomicU64>,
+    phase: &'static str,
+}
+impl Queued {
+    async fn wait(&self, phase: &str) {
+        tokio::task::yield_now().await;
+        if self.phase == phase {
+            self.now.store(100, Ordering::SeqCst);
+        }
+    }
+}
+impl Transport for Queued {
+    async fn supported_details(
+        &self,
+        authorization: &DispatchGuard<'_>,
+    ) -> crate::facilitator::Exchange<proto::SupportedResponse> {
+        self.wait("supported").await;
+        self.remote.supported_details(authorization).await
+    }
+    async fn verify_details(
+        &self,
+        request: &proto::VerifyRequest,
+        authorization: &DispatchGuard<'_>,
+    ) -> crate::facilitator::Exchange<proto::VerifyResponse> {
+        self.wait("verify").await;
+        self.remote.verify_details(request, authorization).await
+    }
+    async fn settle_details(
+        &self,
+        request: &proto::SettleRequest,
+        authorization: &DispatchGuard<'_>,
+    ) -> crate::facilitator::Exchange<proto::SettleResponse> {
+        self.wait("settle").await;
+        self.remote.settle_details(request, authorization).await
+    }
+}
+#[tokio::test]
+async fn queued_transports_recheck_live_authorization_before_each_sdk_call() {
+    for (phase, replies) in [("supported", 0), ("verify", 1), ("settle", 2)] {
+        let now = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let clock = now.clone();
+        let remote = Remote::default();
+        let calls = remote.calls.clone();
+        let seen = remote.requests.clone();
+        let adapter = X402::new(
+            "crypto".into(),
+            Queued {
+                remote: Sdk(remote),
+                now,
+                phase,
+            },
+            16384,
+            Mode::Production,
+        )
+        .unwrap();
+        let request = request("x402.settle");
+        let dispatch = Dispatch::new(
+            &request,
+            crate::test_support::permit(&request, Mode::Production),
+            0,
+            Arc::new(move || clock.load(Ordering::SeqCst)),
+        )
+        .unwrap();
+        let result = Adapter::execute(&adapter, &dispatch, "key", None)
+            .await
+            .unwrap();
+        assert_eq!(result.state, State::Unknown);
+        assert_eq!(result.upstream.len(), replies);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(seen.lock().unwrap().len(), usize::from(phase == "settle"));
+    }
+}
+
+struct QueuedReader(Arc<std::sync::atomic::AtomicU64>);
+#[async_trait]
+impl ReceiptReader for QueuedReader {
+    async fn settled(
+        &self,
+        network: &str,
+        transaction: &str,
+        authorization: &DispatchGuard<'_>,
+    ) -> Result<ReceiptObservation> {
+        tokio::task::yield_now().await;
+        self.0.store(100, Ordering::SeqCst);
+        authorization.check()?;
+        Reader(true)
+            .settled(network, transaction, authorization)
+            .await
+    }
+}
+#[tokio::test]
+async fn a_queued_receipt_read_cannot_outlive_its_authorization() {
+    let now = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let clock = now.clone();
+    let adapter = configured("crypto".into(), Remote::default(), 16384)
+        .unwrap()
+        .with_reader(Arc::new(QueuedReader(now)));
+    let observation = adapter
+        .execute(&request("x402.settle"), "key", None)
+        .await
+        .unwrap();
+    let mut request = request("x402.settle");
+    request.kind = Action::Observe;
+    let dispatch = Dispatch::new(
+        &request,
+        crate::test_support::permit(&request, Mode::Production),
+        0,
+        Arc::new(move || clock.load(Ordering::SeqCst)),
+    )
+    .unwrap();
+    assert!(matches!(
+        Adapter::observe(&adapter, &dispatch, observation.continuation.as_ref()).await,
+        Err(Error::Expired)
+    ));
 }

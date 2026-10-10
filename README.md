@@ -136,3 +136,17 @@ The shared executor preserves unexpected authenticated fees in `cost.violation`
 and cascade `charge_violation`, keeping them distinct from the original maximum.
 Failed final caller-state writes return `commit_error` and Unknown with explicit
 private reconciliation data; they cannot produce proof or automatic fallback.
+
+Rich `facilitator::Transport` and `ReceiptReader` implementations receive a
+borrowed `facilitator::DispatchGuard`. They must call `check()` after any queue or
+await and immediately before each network dispatch. It retains the actual adapter
+account/mode and live quote deadline; it cannot be detached from the dispatch.
+The concrete HTTP transport performs this check after request construction.
+
+`facilitator::Sdk` checks at the upstream invocation. Its host must configure an
+SDK with no internal queue, automatic retries, detached work or hidden extra
+calls, because the upstream Facilitator trait cannot accept a deadline. An SDK
+that needs such a queue must implement the rich Transport seam and carry the
+borrowed guard to its actual I/O edge. The compatibility Facilitator methods on
+HttpFacilitator remain low-level protocol primitives; use its rich Transport
+implementation directly inside X402 for enforced phase authorization.

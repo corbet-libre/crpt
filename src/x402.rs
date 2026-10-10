@@ -1,5 +1,5 @@
 //! x402 v2 adapter. Maintained upstream types and facilitators own the protocol.
-use crate::facilitator::Transport;
+use crate::facilitator::{DispatchGuard, Transport};
 use crate::payments::*;
 use crate::{
     cost::{Amount, Dispatch, Mode},
@@ -25,11 +25,17 @@ pub type Offer = v2::PaymentRequired;
 
 /// Optional read-only chain/provider reconciliation, implemented with its SDK.
 /// Core x402 has no standard transaction-status endpoint; never retry `/settle`
-/// to implement this interface.
+/// to implement this interface. Check the supplied guard immediately before I/O,
+/// after any queue/await. No detached calls, hidden retries or additional writes.
 #[async_trait]
 pub trait ReceiptReader: Send + Sync {
     /// Confirm whether this previously returned settlement still holds.
-    async fn settled(&self, network: &str, transaction: &str) -> Result<ReceiptObservation>;
+    async fn settled(
+        &self,
+        network: &str,
+        transaction: &str,
+        authorization: &DispatchGuard<'_>,
+    ) -> Result<ReceiptObservation>;
 }
 
 /// Read-only provider result, with explicit transient details and fee reporting.
@@ -184,11 +190,13 @@ impl<F: Transport> Adapter for X402<F> {
         if previous.is_some() {
             return Err(Error::Invalid);
         }
+        let check = || request.check(&self.id, self.mode);
+        let authorization = DispatchGuard::new(&check);
         let (wire, requirements) = self.wire(request)?;
         request.check(&self.id, self.mode)?;
         let supported = self
             .facilitator
-            .supported_details()
+            .supported_details(&authorization)
             .with_subscriber(tracing::subscriber::NoSubscriber::default())
             .await;
         let mut upstream = supported.upstream;
@@ -219,7 +227,7 @@ impl<F: Transport> Adapter for X402<F> {
         }
         let verified = self
             .facilitator
-            .verify_details(&wire)
+            .verify_details(&wire, &authorization)
             .with_subscriber(tracing::subscriber::NoSubscriber::default())
             .await;
         upstream.extend(verified.upstream);
@@ -277,7 +285,7 @@ impl<F: Transport> Adapter for X402<F> {
         }
         let exchange = self
             .facilitator
-            .settle_details(&wire)
+            .settle_details(&wire, &authorization)
             .with_subscriber(tracing::subscriber::NoSubscriber::default())
             .await;
         upstream.extend(exchange.upstream);
@@ -347,8 +355,10 @@ impl<F: Transport> Adapter for X402<F> {
             serde_json::from_slice(continuation.ok_or(Error::Unsupported)?.expose())
                 .map_err(|_| Error::Invalid)?;
         request.check(&self.id, self.mode)?;
+        let check = || request.check(&self.id, self.mode);
+        let authorization = DispatchGuard::new(&check);
         let read = reader
-            .settled(&receipt.network, &receipt.transaction)
+            .settled(&receipt.network, &receipt.transaction, &authorization)
             .with_subscriber(tracing::subscriber::NoSubscriber::default())
             .await?;
         let mut result = if read.settled {
