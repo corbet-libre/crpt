@@ -45,6 +45,10 @@ response limits, disabled redirects and disabled automatic retries. No endpoints
 credentials or environment variables are discovered. We use upstream libraries
 for protocol types, HTTP, encoding and cryptographic primitives.
 
+The [shared credential contract](https://git.corbet.ch/corbet-foss/cpmt/src/branch/main/docs/CREDENTIALS.md)
+describes host injection, dynamic authentication, credential replacement and the
+separate stable payment-journal key.
+
 Surveyed [x402-rs](https://github.com/x402-rs/x402-rs) and
 [r402](https://github.com/qntx/r402). x402-rs's transport-independent interface fits
 the existing gate model without importing a resource server, wallet or payment
