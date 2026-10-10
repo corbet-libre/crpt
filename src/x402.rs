@@ -1,14 +1,16 @@
 //! x402 v2 adapter. Maintained upstream types and facilitators own the protocol.
+use crate::facilitator::Transport;
 use crate::payments::*;
+use crate::{
+    cost::{Amount, Dispatch, Mode},
+    details::ProviderReply,
+};
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
-use x402_types::{
-    facilitator::Facilitator,
-    proto::{self, v2},
-};
+use x402_types::proto::{self, v2};
 
 /// HTTP response header for a base64-encoded x402 offer.
 pub const PAYMENT_REQUIRED: &str = "PAYMENT-REQUIRED";
@@ -26,7 +28,17 @@ pub type Offer = v2::PaymentRequired;
 #[async_trait]
 pub trait ReceiptReader: Send + Sync {
     /// Confirm whether this previously returned settlement still holds.
-    async fn settled(&self, network: &str, transaction: &str) -> Result<bool>;
+    async fn settled(&self, network: &str, transaction: &str) -> Result<ReceiptObservation>;
+}
+
+/// Read-only provider result, with explicit transient details and fee reporting.
+pub struct ReceiptObservation {
+    /// Whether the previously returned settlement still holds.
+    pub settled: bool,
+    /// Complete available response data; it never becomes a gate proof by itself.
+    pub upstream: Vec<ProviderReply>,
+    /// Authenticated service charge, separately from payment principal.
+    pub actual_cost: Option<Amount>,
 }
 
 /// Canonical scheme authorization facts, established using a maintained scheme SDK.
@@ -48,6 +60,7 @@ pub trait AuthorizationIdentity: Send + Sync {
 
 /// x402 capability over any maintained upstream facilitator implementation.
 pub struct X402<F> {
+    mode: Mode,
     id: String,
     facilitator: F,
     max_input_bytes: usize,
@@ -59,20 +72,23 @@ pub struct X402<F> {
 struct Receipt {
     network: String,
     transaction: String,
+    verified_terms: bool,
 }
 
-impl<F: Facilitator + Send + Sync> X402<F> {
+impl<F: Transport> X402<F> {
     /// Configure a trusted facilitator and an explicit payload bound.
     /// No currency, chain, scheme, wallet or provider is selected implicitly.
-    pub fn new(id: String, facilitator: F, max_input_bytes: usize) -> Result<Self> {
+    pub fn new(id: String, facilitator: F, max_input_bytes: usize, mode: Mode) -> Result<Self> {
         if id.is_empty()
             || id.len() > 256
             || id.chars().any(char::is_control)
             || max_input_bytes == 0
+            || mode == Mode::Simulation
         {
             return Err(Error::Invalid);
         }
         Ok(Self {
+            mode,
             id,
             facilitator,
             max_input_bytes,
@@ -138,7 +154,10 @@ impl<F: Facilitator + Send + Sync> X402<F> {
     }
 }
 
-impl<F: Facilitator + Send + Sync> Adapter for X402<F> {
+impl<F: Transport> Adapter for X402<F> {
+    fn mode(&self) -> Mode {
+        self.mode
+    }
     fn max_input_bytes(&self) -> usize {
         self.max_input_bytes
     }
@@ -150,10 +169,14 @@ impl<F: Facilitator + Send + Sync> Adapter for X402<F> {
     }
     async fn execute(
         &self,
-        request: &Instruction,
+        request: &Dispatch<'_>,
         _key: &str,
         previous: Option<&Private>,
     ) -> Result<Observation> {
+        request.check(&self.id, self.mode)?;
+        if request.kind != Action::Execute {
+            return Err(Error::Invalid);
+        }
         if !self.capabilities().operations.contains(&request.operation) {
             return Err(Error::Unsupported);
         }
@@ -161,35 +184,60 @@ impl<F: Facilitator + Send + Sync> Adapter for X402<F> {
             return Err(Error::Invalid);
         }
         let (wire, requirements) = self.wire(request)?;
-        let supported = self
-            .facilitator
-            .supported()
-            .await
-            .map_err(|_| Error::Rejected)?;
+        let supported = self.facilitator.supported_details().await;
+        let mut upstream = supported.upstream;
+        let supported = match supported.result {
+            Ok(value) => value,
+            Err(_) => {
+                return Ok(Observation {
+                    upstream,
+                    ..Observation::fact(State::Unknown)
+                });
+            }
+        };
         if !supported.kinds.iter().any(|kind| {
             kind.x402_version == 2
                 && kind.scheme == requirements.scheme
                 && kind.network == requirements.network.to_string()
         }) {
-            return Err(Error::Unsupported);
+            return Ok(Observation {
+                upstream,
+                ..Observation::fact(State::Failed)
+            });
         }
-        let verified = self
-            .facilitator
-            .verify(&wire)
-            .await
-            .map_err(|_| Error::Rejected)?;
+        let verified = self.facilitator.verify_details(&wire).await;
+        upstream.extend(verified.upstream);
+        let verified = match verified.result {
+            Ok(value) => value,
+            Err(_) => {
+                return Ok(Observation {
+                    upstream,
+                    ..Observation::fact(State::Unknown)
+                });
+            }
+        };
         if verified.0.get("isValid").and_then(Value::as_bool) != Some(true) {
-            return Err(Error::Rejected);
+            return Ok(Observation {
+                upstream,
+                ..Observation::fact(State::Failed)
+            });
         }
         if request.operation == "x402.verify" {
             // Verification is not a hold or settlement. The caller decides whether
             // this weaker fact permits its resource to execute before settlement.
             let mut observation = Observation::fact(State::Verified);
+            observation.upstream = upstream;
+            observation.satisfies_terms = true;
             if let Some(identity) = &self.identity {
-                let authorization = identity.identify(&wire)?;
-                if authorization.identity.expose().is_empty() {
-                    return Err(Error::Rejected);
-                }
+                let authorization = match identity.identify(&wire) {
+                    Ok(value) if !value.identity.expose().is_empty() => value,
+                    _ => {
+                        return Ok(Observation {
+                            upstream: observation.upstream,
+                            ..Observation::fact(State::Failed)
+                        });
+                    }
+                };
                 let claim = serde_json::to_vec(&(
                     "x402.authorization.v2",
                     &requirements.scheme,
@@ -202,9 +250,16 @@ impl<F: Facilitator + Send + Sync> Adapter for X402<F> {
             }
             return Ok(observation);
         }
-        let reply = match self.facilitator.settle(&wire).await {
+        let settled = self.facilitator.settle_details(&wire).await;
+        upstream.extend(settled.upstream);
+        let reply = match settled.result {
             Ok(reply) => reply.0,
-            Err(_) => return Ok(Observation::fact(State::Unknown)),
+            Err(_) => {
+                return Ok(Observation {
+                    upstream,
+                    ..Observation::fact(State::Unknown)
+                });
+            }
         };
         // Even a negative settlement response may describe an in-flight transaction.
         // Only explicit success with a receipt in the requested network is evidence.
@@ -221,15 +276,20 @@ impl<F: Facilitator + Send + Sync> Adapter for X402<F> {
             .map(|(network, transaction)| Receipt {
                 network: network.into(),
                 transaction: transaction.into(),
+                verified_terms: reply.get("success").and_then(Value::as_bool) == Some(true),
             });
         let Some(receipt) = receipt else {
-            return Ok(Observation::fact(State::Unknown));
+            return Ok(Observation {
+                upstream,
+                ..Observation::fact(State::Unknown)
+            });
         };
         if reply.get("success").and_then(Value::as_bool) != Some(true) {
             return Ok(Observation {
                 continuation: Some(Private::new(
                     serde_json::to_vec(&receipt).map_err(|_| Error::Invalid)?,
                 )),
+                upstream,
                 ..Observation::fact(State::Unknown)
             });
         }
@@ -241,35 +301,44 @@ impl<F: Facilitator + Send + Sync> Adapter for X402<F> {
         );
         let mut observation = settled(receipt)?;
         observation.member_action = Some(handover);
+        observation.upstream = upstream;
         Ok(observation)
     }
     async fn observe(
         &self,
-        _operation: &str,
+        request: &Dispatch<'_>,
         continuation: Option<&Private>,
     ) -> Result<Observation> {
+        request.check(&self.id, self.mode)?;
+        if request.kind != Action::Observe {
+            return Err(Error::Invalid);
+        }
         let reader = self.reader.as_ref().ok_or(Error::Unsupported)?;
         let receipt: Receipt =
             serde_json::from_slice(continuation.ok_or(Error::Unsupported)?.expose())
                 .map_err(|_| Error::Invalid)?;
-        if reader
+        let read = reader
             .settled(&receipt.network, &receipt.transaction)
-            .await?
-        {
-            settled(receipt)
+            .await?;
+        let mut result = if read.settled {
+            settled(receipt)?
         } else {
-            Ok(Observation {
+            Observation {
                 continuation: Some(Private::new(
                     serde_json::to_vec(&receipt).map_err(|_| Error::Invalid)?,
                 )),
                 ..Observation::fact(State::Unknown)
-            })
-        }
+            }
+        };
+        result.upstream = read.upstream;
+        result.actual_cost = read.actual_cost;
+        Ok(result)
     }
 }
 
 fn settled(receipt: Receipt) -> Result<Observation> {
     Ok(Observation {
+        satisfies_terms: receipt.verified_terms,
         claim: Some(Private::new(
             serde_json::to_vec(&("x402.settlement.v2", &receipt.network, &receipt.transaction))
                 .expect("string tuples serialize to a byte vector"),

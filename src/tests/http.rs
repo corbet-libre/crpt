@@ -151,3 +151,40 @@ fn local_fixture_transport_is_restricted_to_loopback_http() {
         );
     }
 }
+
+#[tokio::test]
+async fn detailed_transport_keeps_extensions_and_failed_bodies_private_per_call() {
+    let (url,calls)=server(vec![
+        response(r#"{"kinds":[],"extensions":[],"signers":{},"unknown_extension":{"secret":"retained only on request"}}"#),
+        response(r#"{"isValid":true,"unknown_verify":"full"}"#),
+        response(r#"{"success":true,"unknown_settle":"full"}"#),
+        response("private-invalid-json"),
+        "HTTP/1.1 403 Forbidden\r\nContent-Length: 13\r\nConnection: close\r\n\r\nprivate-error".into(),
+    ]).await;
+    let client =
+        HttpFacilitator::build(url, HeaderMap::new(), Duration::from_secs(2), 4096, true).unwrap();
+    let supported = client.supported_details().await;
+    assert!(supported.result.is_ok());
+    assert!(
+        String::from_utf8_lossy(supported.upstream[0].payload.expose())
+            .contains("unknown_extension")
+    );
+    let request: VerifyRequest =
+        serde_json::from_str(r#"{"x402Version":2,"paymentPayload":{},"paymentRequirements":{}}"#)
+            .unwrap();
+    assert_eq!(
+        client.verify_details(&request).await.result.unwrap().0["unknown_verify"],
+        "full"
+    );
+    assert_eq!(
+        client.settle_details(&request).await.result.unwrap().0["unknown_settle"],
+        "full"
+    );
+    for expected in [b"private-invalid-json".as_slice(), b"private-error"] {
+        let exchange = client.supported_details().await;
+        assert_eq!(exchange.result.unwrap_err(), Error::Rejected);
+        assert_eq!(exchange.upstream[0].payload.expose(), expected);
+        assert!(!format!("{:?}", exchange.upstream[0]).contains("private"));
+    }
+    assert_eq!(calls.await.unwrap().len(), 5);
+}

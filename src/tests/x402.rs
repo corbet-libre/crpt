@@ -1,8 +1,11 @@
 use super::*;
+use crate::facilitator::{Sdk, Transport};
+use crate::test_support::FixturePayments;
 use std::sync::{
     Mutex,
     atomic::{AtomicUsize, Ordering},
 };
+use x402_types::facilitator::Facilitator;
 
 #[derive(Clone)]
 struct Remote {
@@ -77,7 +80,7 @@ pub(super) fn terms() -> Value {
 }
 pub(super) fn request(operation: &str) -> Instruction {
     let resource = serde_json::json!({"url":"https://merchant.example/resource"});
-    Instruction { id:[1;32],parent:None,adapter:"crypto".into(),operation:operation.into(),binding:Binding{scope:"community".into(),subject:"member".into(),action:"resource".into()},expires_at:100,
+    Instruction { kind: Action::Execute, id:[1;32],parent:None,adapter:"crypto".into(),operation:operation.into(),binding:Binding{scope:"community".into(),subject:"member".into(),action:"resource".into()},expires_at:100,
         terms:Private::new(serde_json::to_vec(&serde_json::json!({"x402Version":2,"resource":resource,"accepts":[terms()]})).unwrap()),
         evidence:Private::new(serde_json::to_vec(&serde_json::json!({"x402Version":2,"accepted":terms(),"resource":resource,"payload":{"signature":"fixture-signature","authorization":{"from":"PRIVATE-PAYER","nonce":"fixture-nonce"}}})).unwrap()) }
 }
@@ -89,7 +92,9 @@ async fn settlement_uses_trusted_terms_and_reduces_every_provider_response() {
     let requests = remote.requests.clone();
     let mut payments = Payments::new(MemoryJournal::default(), [9; 32]).unwrap();
     payments
-        .register(Arc::new(X402::new("crypto".into(), remote, 16384).unwrap()))
+        .register(Arc::new(
+            configured("crypto".into(), remote, 16384).unwrap(),
+        ))
         .unwrap();
     let request = request("x402.settle");
     let result = payments.execute(&request, 1).await.unwrap();
@@ -139,7 +144,7 @@ async fn settlement_uses_trusted_terms_and_reduces_every_provider_response() {
 async fn verification_is_not_collection_and_does_not_call_settlement() {
     let remote = Remote::default();
     let calls = remote.calls.clone();
-    let adapter = X402::new("crypto".into(), remote, 16384).unwrap();
+    let adapter = configured("crypto".into(), remote, 16384).unwrap();
     let observation = adapter
         .execute(&request("x402.verify"), "key", None)
         .await
@@ -156,7 +161,7 @@ async fn client_cannot_change_amount_asset_network_recipient_or_resource() {
     let remote = Remote::default();
     let calls = remote.calls.clone();
     let requests = remote.requests.clone();
-    let adapter = X402::new("crypto".into(), remote, 16384).unwrap();
+    let adapter = configured("crypto".into(), remote, 16384).unwrap();
     for field in ["amount", "asset", "network", "payTo", "scheme"] {
         let mut request = request("x402.settle");
         let mut evidence: Value = serde_json::from_slice(request.evidence.expose()).unwrap();
@@ -193,12 +198,14 @@ async fn invalid_verification_and_unsupported_schemes_cannot_settle() {
         },
     ] {
         let calls = remote.calls.clone();
-        let adapter = X402::new("crypto".into(), remote, 16384).unwrap();
-        assert!(
+        let adapter = configured("crypto".into(), remote, 16384).unwrap();
+        assert_eq!(
             adapter
                 .execute(&request("x402.settle"), "key", None)
                 .await
-                .is_err()
+                .unwrap()
+                .state,
+            State::Failed
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
@@ -216,7 +223,7 @@ async fn settlement_timeout_failure_and_wrong_network_never_prove_success() {
             ..Default::default()
         },
     ] {
-        let adapter = X402::new("crypto".into(), remote, 16384).unwrap();
+        let adapter = configured("crypto".into(), remote, 16384).unwrap();
         assert_eq!(
             adapter
                 .execute(&request("x402.settle"), "key", None)
@@ -231,7 +238,7 @@ async fn settlement_timeout_failure_and_wrong_network_never_prove_success() {
         serde_json::json!({"success":true,"network":"eip155:1","transaction":"tx"}),
         serde_json::json!({"success":true,"network":"eip155:8453","transaction":""}),
     ] {
-        let adapter = X402::new(
+        let adapter = configured(
             "crypto".into(),
             Remote {
                 reply,
@@ -254,16 +261,20 @@ async fn settlement_timeout_failure_and_wrong_network_never_prove_success() {
 struct Reader(bool);
 #[async_trait]
 impl ReceiptReader for Reader {
-    async fn settled(&self, network: &str, transaction: &str) -> Result<bool> {
+    async fn settled(&self, network: &str, transaction: &str) -> Result<ReceiptObservation> {
         assert_eq!(network, "eip155:8453");
         assert_eq!(transaction, "fixture-tx");
-        Ok(self.0)
+        Ok(ReceiptObservation {
+            settled: self.0,
+            upstream: Vec::new(),
+            actual_cost: None,
+        })
     }
 }
 
 #[tokio::test]
 async fn reconciliation_is_read_only_and_requires_a_provider_observer() {
-    let adapter = X402::new("crypto".into(), Remote::default(), 16384).unwrap();
+    let adapter = configured("crypto".into(), Remote::default(), 16384).unwrap();
     let observation = adapter
         .execute(&request("x402.settle"), "key", None)
         .await
@@ -307,9 +318,9 @@ async fn malformed_inputs_limits_and_unknown_operations_fail_before_network() {
         ("crypto", 0),
         (&"a".repeat(257), 10),
     ] {
-        assert!(X402::new(id.into(), Remote::default(), limit).is_err());
+        assert!(configured(id.into(), Remote::default(), limit).is_err());
     }
-    let adapter = X402::new("crypto".into(), Remote::default(), 16384).unwrap();
+    let adapter = configured("crypto".into(), Remote::default(), 16384).unwrap();
     assert!(
         adapter
             .execute(&request("absent"), "key", None)
@@ -328,7 +339,7 @@ async fn malformed_inputs_limits_and_unknown_operations_fail_before_network() {
     invalid = request("x402.settle");
     invalid.terms = Private::new(b"{}".to_vec());
     assert!(adapter.execute(&invalid, "key", None).await.is_err());
-    let adapter = X402::new("crypto".into(), Remote::default(), 1).unwrap();
+    let adapter = configured("crypto".into(), Remote::default(), 1).unwrap();
     assert!(
         adapter
             .execute(&request("x402.settle"), "key", None)
@@ -385,13 +396,15 @@ async fn unavailable_or_mismatched_facilitators_cannot_settle() {
         },
     ] {
         let calls = remote.calls.clone();
-        let adapter = X402::new("crypto".into(), remote, 16384).unwrap();
-        assert!(
+        let adapter = configured("crypto".into(), remote, 16384).unwrap();
+        assert!(matches!(
             adapter
                 .execute(&request("x402.settle"), "key", None)
                 .await
-                .is_err()
-        );
+                .unwrap()
+                .state,
+            State::Unknown | State::Failed
+        ));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }
@@ -426,7 +439,7 @@ impl AuthorizationIdentity for EmptyIdentity {
 #[tokio::test]
 async fn unsigned_metadata_cannot_multiply_verification_receipts_or_extend_authorization_expiry() {
     for canonical in [false, true] {
-        let mut adapter = X402::new("crypto".into(), Remote::default(), 16384).unwrap();
+        let mut adapter = configured("crypto".into(), Remote::default(), 16384).unwrap();
         if canonical {
             adapter = adapter.with_authorization_identity(Arc::new(SchemeIdentity));
         }
@@ -481,11 +494,136 @@ async fn unsigned_metadata_cannot_multiply_verification_receipts_or_extend_autho
             ));
         }
     }
-    let adapter = X402::new("crypto".into(), Remote::default(), 16384)
+    let adapter = configured("crypto".into(), Remote::default(), 16384)
         .unwrap()
         .with_authorization_identity(Arc::new(EmptyIdentity));
-    assert!(matches!(
-        adapter.execute(&request("x402.verify"), "key", None).await,
-        Err(Error::Rejected)
-    ));
+    assert_eq!(
+        adapter
+            .execute(&request("x402.verify"), "key", None)
+            .await
+            .unwrap()
+            .state,
+        State::Failed
+    );
+}
+
+fn configured<F: Facilitator + Send + Sync>(
+    id: String,
+    facilitator: F,
+    limit: usize,
+) -> Result<X402<Sdk<F>>> {
+    X402::new(id, Sdk(facilitator), limit, Mode::Production)
+}
+impl<F: Transport> X402<F> {
+    async fn execute(
+        &self,
+        request: &Instruction,
+        key: &str,
+        previous: Option<&Private>,
+    ) -> Result<Observation> {
+        let auth = Dispatch::new(request, crate::test_support::permit(request, self.mode), 0)?;
+        Adapter::execute(self, &auth, key, previous).await
+    }
+    async fn observe(&self, operation: &str, previous: Option<&Private>) -> Result<Observation> {
+        let mut request = request(operation);
+        request.kind = Action::Observe;
+        let auth = Dispatch::new(
+            &request,
+            crate::test_support::permit(&request, self.mode),
+            0,
+        )?;
+        Adapter::observe(self, &auth, previous).await
+    }
+}
+
+#[tokio::test]
+async fn complete_results_are_explicit_and_sandbox_cannot_grant_paid_access() {
+    for mode in [Mode::Production, Mode::Sandbox] {
+        let mut payments = Payments::new(MemoryJournal::default(), [9; 32]).unwrap();
+        payments
+            .register(Arc::new(
+                X402::new("crypto".into(), Sdk(Remote::default()), 16384, mode).unwrap(),
+            ))
+            .unwrap();
+        let request = request("x402.settle");
+        let result = payments
+            .dispatch_with_output(
+                &request,
+                crate::test_support::permit(&request, mode),
+                1,
+                crate::details::Disclosure::Complete,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.upstream.len(), 3);
+        let full: Value = serde_json::from_slice(result.upstream[2].payload.expose()).unwrap();
+        assert_eq!(full["KYC"], "SECRET");
+        assert!(result.outcome.satisfies_terms());
+        let access = payments.paid_access(
+            &request,
+            &result.outcome,
+            crate::access::Request {
+                level: "supporter".into(),
+                period: crate::access::Period { start: 1, end: 50 },
+                requires: State::Settled,
+            },
+            1,
+        );
+        assert_eq!(access.is_ok(), mode == Mode::Production);
+        assert!(
+            payments
+                .dispatch_with_output(
+                    &request,
+                    crate::test_support::permit(&request, mode),
+                    1,
+                    crate::details::Disclosure::Complete
+                )
+                .await
+                .unwrap()
+                .upstream
+                .is_empty()
+        );
+    }
+    assert!(
+        X402::new(
+            "crypto".into(),
+            Sdk(Remote::default()),
+            16384,
+            Mode::Simulation
+        )
+        .is_err()
+    );
+    let adapter = configured("crypto".into(), Remote::default(), 16384).unwrap();
+    let request = request("x402.settle");
+    let wrong = Dispatch::new(
+        &request,
+        crate::test_support::permit(&request, Mode::Sandbox),
+        1,
+    )
+    .unwrap();
+    assert!(
+        Adapter::execute(&adapter, &wrong, "key", None)
+            .await
+            .is_err()
+    );
+    let mut read = self::request("x402.settle");
+    read.kind = Action::Observe;
+    let wrong = Dispatch::new(
+        &read,
+        crate::test_support::permit(&read, Mode::Production),
+        1,
+    )
+    .unwrap();
+    assert!(
+        Adapter::execute(&adapter, &wrong, "key", None)
+            .await
+            .is_err()
+    );
+    let wrong = Dispatch::new(
+        &request,
+        crate::test_support::permit(&request, Mode::Production),
+        1,
+    )
+    .unwrap();
+    assert!(Adapter::observe(&adapter, &wrong, None).await.is_err());
 }

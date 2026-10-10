@@ -1,6 +1,10 @@
 //! Bounded HTTP transport implementing the upstream x402 facilitator interface.
 //! No redirects, automatic retries, response logging or implicit credentials.
-use crate::payments::{Error, Result};
+use crate::payments::{Error, Private, Result};
+use crate::{
+    details::ProviderReply,
+    facilitator::{Exchange, Transport},
+};
 use reqwest::{Client, Method, header::HeaderMap};
 use serde::{Serialize, de::DeserializeOwned};
 use std::time::Duration;
@@ -63,22 +67,21 @@ impl HttpFacilitator {
             max_response_bytes,
         })
     }
-    async fn request<T: Serialize + Sync, R: DeserializeOwned>(
+    async fn send<T: Serialize + Sync>(
         &self,
         method: Method,
-        path: &str,
+        path: &'static str,
         body: Option<&T>,
-    ) -> Result<R> {
+    ) -> Result<ProviderReply> {
         let url = self.base.join(path).map_err(|_| Error::Invalid)?;
         let mut request = self.client.request(method, url);
         if let Some(body) = body {
             request = request.json(body);
         }
         let mut response = request.send().await.map_err(transport_error)?;
-        if !response.status().is_success()
-            || response
-                .content_length()
-                .is_some_and(|length| length > self.max_response_bytes as u64)
+        if response
+            .content_length()
+            .is_some_and(|length| length > self.max_response_bytes as u64)
         {
             return Err(Error::Rejected);
         }
@@ -89,7 +92,35 @@ impl HttpFacilitator {
             }
             bytes.extend_from_slice(&chunk);
         }
-        serde_json::from_slice(&bytes).map_err(|_| Error::Rejected)
+        Ok(ProviderReply {
+            phase: path,
+            http_status: Some(response.status().as_u16()),
+            payload: Private::new(std::mem::take(&mut *bytes)),
+        })
+    }
+    async fn exchange<T: Serialize + Sync, R: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &'static str,
+        body: Option<&T>,
+    ) -> Exchange<R> {
+        match self.send(method, path, body).await {
+            Ok(reply) => {
+                let result = if reply.http_status.is_some_and(|s| (200..300).contains(&s)) {
+                    serde_json::from_slice(reply.payload.expose()).map_err(|_| Error::Rejected)
+                } else {
+                    Err(Error::Rejected)
+                };
+                Exchange {
+                    result,
+                    upstream: vec![reply],
+                }
+            }
+            Err(error) => Exchange {
+                result: Err(error),
+                upstream: Vec::new(),
+            },
+        }
     }
 }
 
@@ -100,16 +131,34 @@ fn transport_error(_: reqwest::Error) -> Error {
 impl Facilitator for HttpFacilitator {
     type Error = Error;
     async fn verify(&self, request: &VerifyRequest) -> Result<VerifyResponse> {
-        self.request(Method::POST, "verify", Some(request)).await
+        self.exchange(Method::POST, "verify", Some(request))
+            .await
+            .result
     }
     async fn settle(&self, request: &SettleRequest) -> Result<SettleResponse> {
-        self.request(Method::POST, "settle", Some(request)).await
+        self.exchange(Method::POST, "settle", Some(request))
+            .await
+            .result
     }
     async fn supported(&self) -> Result<SupportedResponse> {
-        self.request::<(), _>(Method::GET, "supported", None).await
+        self.exchange::<(), _>(Method::GET, "supported", None)
+            .await
+            .result
     }
 }
 
 #[cfg(test)]
 #[path = "tests/http.rs"]
 mod tests;
+
+impl Transport for HttpFacilitator {
+    async fn supported_details(&self) -> Exchange<SupportedResponse> {
+        self.exchange::<(), _>(Method::GET, "supported", None).await
+    }
+    async fn verify_details(&self, request: &VerifyRequest) -> Exchange<VerifyResponse> {
+        self.exchange(Method::POST, "verify", Some(request)).await
+    }
+    async fn settle_details(&self, request: &SettleRequest) -> Exchange<SettleResponse> {
+        self.exchange(Method::POST, "settle", Some(request)).await
+    }
+}

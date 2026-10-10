@@ -12,3 +12,9 @@
 - Workstations edit/format; Crow compiles and tests committed candidates.
   Do not claim completion before required checks pass. Forgejo is primary.
 - All comments/docs are English. Preserve source coverage and privacy checks.
+
+- Follow docs/CONTRACT.md: all domain data stays in RAM; no direct database or
+  file persistence. Caller state receives only minimum operational records.
+- Complete private results are explicit; arbitrary provider JSON is not proof.
+- Cost permits precede every dispatch, including reads. Sandbox and simulation
+  cannot construct production evidence. Owned code forbids unsafe Rust.

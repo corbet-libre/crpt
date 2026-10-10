@@ -1,6 +1,6 @@
 # crpt
 
-Crypto payment adapters for cvld, using the same execution contract as `cpmt`.
+Reusable crypto payment adapters, using the same execution contract as `cpmt`.
 The caller chooses what to collect and what a successful fact permits. There is
 no wallet custody, monetary account ledger, member-to-member transfer, preferred
 chain, currency list or automatic provider fallback.
@@ -30,16 +30,16 @@ signature encodings cannot create new receipts or extend that expiry.
 This keeps authorization, upfront and escrow flows outside a hardcoded core policy.
 
 Register `x402::X402` with `payments::Payments`, which is re-exported from `cpmt`.
-Use a durable shared payment journal and stable secret binding key. `terms` is a
+The host supplies an atomic `Journal` port and stable secret binding key; the library has no database implementation. `terms` is a
 server-created `x402::Offer`; `evidence` is decoded `PAYMENT-SIGNATURE` input.
 Header helpers use standard base64 encoding. A successful settlement's
 `member_action` contains the `PAYMENT-RESPONSE` header value for that authenticated
-member only. Gate consumers receive only `payments::Evidence`.
+member only. Gate consumers receive requested minimal facts. `Payments::paid_access` projects explicitly configured financial terms into an access level and period.
 
 ## Dependencies and transport
 
 `x402-types` supplies the upstream v2 types and `Facilitator` interface. Any
-compatible SDK facilitator can be injected. The optional `http` feature provides
+compatible SDK facilitator can be injected as `facilitator::Sdk(upstream)`. The optional `http` feature provides
 a small `reqwest` transport with explicit HTTPS endpoint/authentication, timeout,
 response limits, disabled redirects and disabled automatic retries. No endpoints,
 credentials or environment variables are discovered. We use upstream libraries
@@ -59,8 +59,10 @@ current semver ranges and first-party `main`, never exact manifest pins.
 
 ## Privacy, retries and reconciliation
 
-The payment boundary discards payer addresses, signatures, KYC fields and raw
-provider responses. It retains only the transaction/network reference needed for
+The default path discards payer addresses, signatures, KYC fields and raw
+provider responses. Explicit `Disclosure::Complete` callers receive available
+results in private transient buffers, including unknown HTTP extensions. The
+caller-owned atomic state port receives only the transaction/network reference needed for
 configured reconciliation; the shared executor stores keyed receipt/context
 bindings. `forget` removes continuation while preserving replay protection.
 A failed, missing or malformed settlement response is `Unknown`, never success.
@@ -100,3 +102,25 @@ the operator's credential and explicit instance/store or sandbox configuration.
 include read-only reconciliation, private checkout-link handoff, amount checks,
 and refusal to treat manual BTCPay marking as settlement. The dependency also
 exposes the fiat profiles; availability does not decide what the host offers.
+
+## Cost authorization and modes
+
+Read the [domain contract](docs/CONTRACT.md) before integration. Configure each
+adapter with `Mode::Production` or `Mode::Sandbox`; the host owns endpoint/account
+selection. Build an inert preview with `Payments::preview`, a trusted tariff and
+its provenance/expiry, then use `cfbk` (re-exported as `cost`) to obtain a move-only
+permit. `dispatch` and fresh `observation` instructions both require that permit.
+The host's atomic journal reserves operation identity and maximum fee together.
+There is no uncosted execution facade and no implicit free facilitator call.
+
+`run` uses the shared planner for an explicit caller-selected cascade, checking
+all alternatives before dispatch and stopping on success, pending or uncertainty.
+`simulation::simulate` uses dummy outcomes and never contacts a provider. Sandbox
+is separate and cannot produce production paid-access evidence. Hosted adapters
+through the `hosted` feature use exactly the same `cpmt` implementation.
+
+The legacy upstream `HttpFacilitator: Facilitator` methods are transport primitives;
+use it directly as `X402`'s response-bearing transport to preserve complete HTTP
+results through the costed payment boundary. Wrapping it in `Sdk` intentionally
+has the upstream trait's typed-data limits. No live provider/chain/sandbox call is
+part of the test suite; fixture success does not qualify a production account.
