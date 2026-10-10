@@ -91,10 +91,11 @@ impl<F: Facilitator + Send + Sync> X402<F> {
             .into_iter()
             .find(|terms| terms == &payload.accepted)
             .ok_or(Error::Rejected)?;
+        let offered_resource = offer.resource.ok_or(Error::Invalid)?;
         if payload
             .resource
             .as_ref()
-            .is_some_and(|resource| resource.url != offer.resource.url)
+            .is_some_and(|resource| resource.url != offered_resource.url)
         {
             return Err(Error::Rejected);
         }
@@ -247,7 +248,7 @@ fn settled(receipt: Receipt) -> Result<Observation> {
 
 /// Encode the caller's offer for `PAYMENT-REQUIRED`. Contains no member data.
 pub fn payment_required(offer: &Offer) -> Result<String> {
-    if offer.accepts.is_empty() {
+    if offer.accepts.is_empty() || offer.resource.is_none() {
         return Err(Error::Invalid);
     }
     Ok(STANDARD.encode(serde_json::to_vec(offer).map_err(|_| Error::Invalid)?))
