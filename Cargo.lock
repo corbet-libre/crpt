@@ -612,7 +612,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 [[package]]
 name = "cpmt"
 version = "0.2.0"
-source = "git+https://git.corbet.ch/corbet-foss/cpmt?branch=main#306bff12585297c6eff85de0eab17762fe1158d5"
+source = "git+https://git.corbet.ch/corbet-foss/cpmt?branch=main#69b7979de877ee8b4d328b300a48f32cadcbc7f2"
 dependencies = [
  "ed25519-dalek",
  "hmac 0.13.0",

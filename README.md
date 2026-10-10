@@ -22,6 +22,11 @@ execution belong to the maintained facilitator implementation.
 scheme determines whether that step collects money, creates an escrow hold or
 performs another effect. A verified authorization is neither collected money nor
 a guaranteed hold. The caller owns resource execution order and eligibility.
+Verification alone emits no spendable gate receipt by default. To use a verified
+but unsettled authorization as gate evidence, inject `AuthorizationIdentity`
+backed by the selected scheme's maintained SDK. It must derive a stable identity
+from the signed domain/authorizer/nonce and an authenticated expiry; unsigned metadata and
+signature encodings cannot create new receipts or extend that expiry.
 This keeps authorization, upfront and escrow flows outside a hardcoded core policy.
 
 Register `x402::X402` with `payments::Payments`, which is re-exported from `cpmt`.

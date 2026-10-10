@@ -2,7 +2,7 @@
 name = "crpt"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.93"
 description = "Crypto payment adapters and x402 support with minimal gate evidence"
 license = "LGPL-3.0-only WITH LGPL-3.0-linking-exception"
 repository = "https://git.corbet.ch/corbet-foss/crpt"

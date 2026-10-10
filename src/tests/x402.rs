@@ -145,7 +145,8 @@ async fn verification_is_not_collection_and_does_not_call_settlement() {
         .await
         .unwrap();
     assert_eq!(observation.state, State::Verified);
-    assert_eq!(observation.valid_until, Some(100));
+    assert_eq!(observation.valid_until, None);
+    assert!(observation.claim.is_none());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(observation.continuation.is_none());
 }
@@ -393,4 +394,98 @@ async fn unavailable_or_mismatched_facilitators_cannot_settle() {
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
+}
+
+struct SchemeIdentity;
+impl AuthorizationIdentity for SchemeIdentity {
+    fn identify(&self, verified: &proto::VerifyRequest) -> Result<Authorization> {
+        let wire: Value = serde_json::from_str(verified.as_str()).unwrap();
+        let authorization = &wire["paymentPayload"]["payload"]["authorization"];
+        Ok(Authorization {
+            identity: Private::new(
+                serde_json::to_vec(&serde_json::json!([
+                    "fixture-signing-domain",
+                    authorization["nonce"]
+                ]))
+                .unwrap(),
+            ),
+            valid_until: 10,
+        })
+    }
+}
+struct EmptyIdentity;
+impl AuthorizationIdentity for EmptyIdentity {
+    fn identify(&self, _: &proto::VerifyRequest) -> Result<Authorization> {
+        Ok(Authorization {
+            identity: Private::new(vec![]),
+            valid_until: 10,
+        })
+    }
+}
+
+#[tokio::test]
+async fn unsigned_metadata_cannot_multiply_verification_receipts_or_extend_authorization_expiry() {
+    for canonical in [false, true] {
+        let mut adapter = X402::new("crypto".into(), Remote::default(), 16384).unwrap();
+        if canonical {
+            adapter = adapter.with_authorization_identity(Arc::new(SchemeIdentity));
+        }
+        let mut payments = Payments::new(MemoryJournal::default(), [9; 32]).unwrap();
+        payments.register(Arc::new(adapter)).unwrap();
+        let mut original = None;
+        for variant in 0..4 {
+            let mut request = request("x402.verify");
+            request.id = [variant + 1; 32];
+            let mut payload: Value = serde_json::from_slice(request.evidence.expose()).unwrap();
+            match variant {
+                1 => {
+                    payload.as_object_mut().unwrap().remove("resource");
+                }
+                2 => {
+                    payload["resource"]["description"] = "changed unsigned description".into();
+                }
+                3 => {
+                    payload["extensions"] = serde_json::json!({"unsigned":"changed"});
+                }
+                _ => {}
+            }
+            request.evidence = Private::new(serde_json::to_vec(&payload).unwrap());
+            let outcome = payments.execute(&request, 1).await.unwrap().outcome;
+            assert_eq!(outcome.state(), State::Verified);
+            let evidence = outcome.evidence(&request.binding, State::Verified, 1, 100);
+            if canonical {
+                let evidence = evidence.unwrap();
+                assert_eq!(evidence.in_context(&request.binding, 9).unwrap().1, 10);
+                assert!(evidence.in_context(&request.binding, 10).is_err());
+                if let Some(original) = original {
+                    assert_eq!(original, *evidence.claim());
+                } else {
+                    original = Some(*evidence.claim());
+                }
+                assert!(
+                    outcome
+                        .evidence(&request.binding, State::Verified, 10, 100)
+                        .is_err()
+                );
+            } else {
+                assert!(matches!(evidence, Err(Error::Rejected)));
+            }
+        }
+        if canonical {
+            let mut foreign = request("x402.verify");
+            foreign.id = [5; 32];
+            foreign.binding.subject = "other-member".into();
+            assert!(matches!(
+                payments.execute(&foreign, 1).await,
+                Err(Error::Conflict)
+            ));
+        }
+    }
+    let adapter = X402::new("crypto".into(), Remote::default(), 16384)
+        .unwrap()
+        .with_authorization_identity(Arc::new(EmptyIdentity));
+    assert!(matches!(
+        adapter.execute(&request("x402.verify"), "key", None).await,
+        Err(Error::Rejected)
+    ));
 }

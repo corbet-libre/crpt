@@ -29,12 +29,30 @@ pub trait ReceiptReader: Send + Sync {
     async fn settled(&self, network: &str, transaction: &str) -> Result<bool>;
 }
 
+/// Canonical scheme authorization facts, established using a maintained scheme SDK.
+/// No unsigned metadata or alternate signature encoding may change this identity.
+pub struct Authorization {
+    /// Stable identity including signing domain, authorizer and authorization nonce.
+    pub identity: Private,
+    /// Exclusive authorization expiry derived from the verified scheme payload.
+    pub valid_until: u64,
+}
+
+/// Trusted scheme-specific extraction after the facilitator verifies a payload.
+/// Implementations must reject unsupported schemes and derive the identity and
+/// expiry from authenticated fields. Resource metadata/extensions are not identity.
+pub trait AuthorizationIdentity: Send + Sync {
+    /// Extract canonical authenticated facts without retaining the authorization.
+    fn identify(&self, verified: &proto::VerifyRequest) -> Result<Authorization>;
+}
+
 /// x402 capability over any maintained upstream facilitator implementation.
 pub struct X402<F> {
     id: String,
     facilitator: F,
     max_input_bytes: usize,
     reader: Option<Arc<dyn ReceiptReader>>,
+    identity: Option<Arc<dyn AuthorizationIdentity>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -59,12 +77,21 @@ impl<F: Facilitator + Send + Sync> X402<F> {
             facilitator,
             max_input_bytes,
             reader: None,
+            identity: None,
         })
     }
 
     /// Supply a trusted read-only settlement observer for this facilitator.
     pub fn with_reader(mut self, reader: Arc<dyn ReceiptReader>) -> Self {
         self.reader = Some(reader);
+        self
+    }
+
+    /// Enable spendable verification evidence for schemes with canonical identity
+    /// and authenticated expiry extraction. Without this, verify reports a fact
+    /// but cannot mint gate evidence. Settlement receipts are unaffected.
+    pub fn with_authorization_identity(mut self, identity: Arc<dyn AuthorizationIdentity>) -> Self {
+        self.identity = Some(identity);
         self
     }
 
@@ -157,18 +184,23 @@ impl<F: Facilitator + Send + Sync> Adapter for X402<F> {
         if request.operation == "x402.verify" {
             // Verification is not a hold or settlement. The caller decides whether
             // this weaker fact permits its resource to execute before settlement.
-            let claim = serde_json::to_vec(&(
-                "x402.authorization.v2",
-                serde_json::from_str::<Value>(wire.as_str())
-                    .expect("upstream constructed valid JSON"),
-            ))
-            .expect("JSON values serialize to a byte vector");
-            return Ok(Observation {
-                state: State::Verified,
-                valid_until: Some(request.expires_at),
-                claim: Some(Private::new(claim)),
-                ..Observation::fact(State::Verified)
-            });
+            let mut observation = Observation::fact(State::Verified);
+            if let Some(identity) = &self.identity {
+                let authorization = identity.identify(&wire)?;
+                if authorization.identity.expose().is_empty() {
+                    return Err(Error::Rejected);
+                }
+                let claim = serde_json::to_vec(&(
+                    "x402.authorization.v2",
+                    &requirements.scheme,
+                    requirements.network.to_string(),
+                    authorization.identity.expose(),
+                ))
+                .expect("authorization identity fields serialize to JSON");
+                observation.claim = Some(Private::new(claim));
+                observation.valid_until = Some(authorization.valid_until.min(request.expires_at));
+            }
+            return Ok(observation);
         }
         let reply = match self.facilitator.settle(&wire).await {
             Ok(reply) => reply.0,
