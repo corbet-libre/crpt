@@ -554,6 +554,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "cfbk"
+version = "0.0.0"
+source = "git+https://git.corbet.ch/corbet-foss/cfbk?branch=main#74928e72164e93116691206cc6873fb23cee10bd"
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -686,9 +691,10 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 [[package]]
 name = "cpmt"
 version = "0.2.0"
-source = "git+https://git.corbet.ch/corbet-foss/cpmt?branch=main#4624b5bb450ee8e33a97fa98d7cc492fb8522ace"
+source = "git+https://git.corbet.ch/corbet-foss/cpmt?branch=main#5360e5b53d21c807434ec32aef8020e50d7ca231"
 dependencies = [
  "base64 0.23.1",
+ "cfbk",
  "ed25519-dalek",
  "hmac 0.13.0",
  "reqwest",

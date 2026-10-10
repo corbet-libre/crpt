@@ -250,9 +250,9 @@ impl<F: Transport> Adapter for X402<F> {
             }
             return Ok(observation);
         }
-        let settled = self.facilitator.settle_details(&wire).await;
-        upstream.extend(settled.upstream);
-        let reply = match settled.result {
+        let exchange = self.facilitator.settle_details(&wire).await;
+        upstream.extend(exchange.upstream);
+        let reply = match exchange.result {
             Ok(reply) => reply.0,
             Err(_) => {
                 return Ok(Observation {
