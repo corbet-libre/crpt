@@ -61,7 +61,7 @@ impl Facilitator for Remote {
     }
 }
 pub(super) fn terms() -> Value {
-    serde_json::json!({"scheme":"exact","network":"eip155:8453","amount":"123456789012345678901234567890","asset":"USDC","payTo":"merchant","maxTimeoutSeconds":30})
+    serde_json::json!({"scheme":"exact","network":"eip155:8453","amount":"123456789012345678901234567890","asset":"USDC","payTo":"merchant","maxTimeoutSeconds":30,"extra":null})
 }
 pub(super) fn request(operation: &str) -> Instruction {
     let resource = serde_json::json!({"url":"https://merchant.example/resource"});
