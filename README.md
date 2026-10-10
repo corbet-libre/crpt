@@ -56,6 +56,10 @@ configured reconciliation; the shared executor stores keyed receipt/context
 bindings. `forget` removes continuation while preserving replay protection.
 A failed, missing or malformed settlement response is `Unknown`, never success.
 A pending transaction reference is retained only to allow read-only reconciliation.
+The bundled adapter uses network plus transaction as the settlement receipt
+identity. Schemes that put multiple independently spendable payments into one
+transaction need a scheme adapter with a canonical allocation identity; the
+bundled adapter conservatively treats that transaction as one receipt.
 
 Core x402 specifies no transaction-status endpoint. Supply a `ReceiptReader`
 backed by a maintained provider/chain SDK when reconciliation is needed; without
