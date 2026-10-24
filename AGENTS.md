@@ -9,7 +9,7 @@
   Use semver ranges and first-party `branch = "main"`, not exact manifest pins.
 - LGPL-3.0-only WITH LGPL-3.0-linking-exception; no GPL/AGPL-only dependencies.
 - Fixtures only. No live billing, chain calls, spending or provider registration.
-- Workstations edit/format; Crow compiles and tests committed candidates.
+- Local checkouts edit/format; Crow compiles and tests committed candidates.
   Do not claim completion before required checks pass. Forgejo is primary.
 - All comments/docs are English. Preserve source coverage and privacy checks.
 
