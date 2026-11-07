@@ -15,7 +15,7 @@ crate-type = ["rlib"]
 
 [features]
 default = []
-http = ["dep:reqwest", "dep:url"]
+http = ["dep:reqwest", "dep:url", "dep:rustls"]
 hosted = ["cpmt/providers"]
 
 [dependencies]
@@ -27,7 +27,8 @@ serde_json = { version = "1", features = ["raw_value"] }
 base64 = "0.23"
 zeroize = "1"
 tracing = "0.1"
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
 url = { version = "2", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

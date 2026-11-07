@@ -21,6 +21,25 @@ pub struct HttpFacilitator {
     max_response_bytes: usize,
 }
 
+/// reqwest is built with `rustls-no-provider`: the process default must be
+/// selected before a client is built. Keep an embedding application's
+/// provider; otherwise pick the maintained ring provider.
+fn install_provider() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+}
+
+fn builder(headers: HeaderMap, timeout: Duration, https_only: bool) -> reqwest::ClientBuilder {
+    Client::builder()
+        .default_headers(headers)
+        .timeout(timeout)
+        .https_only(https_only)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .no_proxy()
+}
+
 impl HttpFacilitator {
     /// Configure an explicit endpoint, authentication headers, timeout and bound.
     /// The endpoint and headers must never come from member evidence.
@@ -55,13 +74,8 @@ impl HttpFacilitator {
         for value in headers.values_mut() {
             value.set_sensitive(true);
         }
-        let client = Client::builder()
-            .default_headers(headers)
-            .timeout(timeout)
-            .https_only(!local_fixture)
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .no_proxy()
+        install_provider();
+        let client = builder(headers, timeout, !local_fixture)
             .build()
             .map_err(transport_error)?;
         Ok(Self {
