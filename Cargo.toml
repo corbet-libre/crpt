@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.93"
 description = "Crypto payment adapters and x402 support with minimal gate evidence"
 license = "LGPL-3.0-only WITH LGPL-3.0-linking-exception"
-repository = "https://git.corbet.ch/corbet-foss/crpt"
+repository = "https://git.corbet.ch/corbet-libre/crpt.git"
 readme = "README.md"
 publish = false
 include = ["Cargo.toml", "src/**", "README.md", "LICENSE", "LICENSE.md", "LICENSES/LGPL-3.0-only.txt", "LICENSES/LGPL-3.0-linking-exception.txt", "LICENSES/GPL-3.0-only.txt"]
@@ -19,7 +19,7 @@ http = ["dep:reqwest", "dep:url", "dep:rustls"]
 hosted = ["cpmt/providers"]
 
 [dependencies]
-cpmt = { git = "https://git.corbet.ch/corbet-foss/cpmt", branch = "main" }
+cpmt = { git = "https://git.corbet.ch/corbet-libre/cpmt.git", branch = "main" }
 async-trait = "0.1"
 x402-types = "2"
 serde = { version = "1", features = ["derive"] }
