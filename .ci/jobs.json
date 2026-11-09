@@ -2,13 +2,14 @@
   "schema": 1,
   "generator": "ccid render v1",
   "tool_revision": "",
-  "manifest_sha256": "da865a68375d9f518c79046406ba933f8abf9e92432cfbf59e0dcf172b80dc4f",
+  "manifest_sha256": "4d13095730b97b09187be186f9842a5a40048975f19853808720147dc2c886cc",
   "jobs": {
     "verify": {
       "job": "verify",
       "scheduler": "forgejo",
       "checks": [
-        "verify"
+        "verify",
+        "advisories"
       ],
       "workflow": "ci",
       "command": [
@@ -26,7 +27,8 @@
       "job": "verify-pr",
       "scheduler": "forgejo",
       "checks": [
-        "verify"
+        "verify",
+        "advisories"
       ],
       "workflow": "pr",
       "command": [

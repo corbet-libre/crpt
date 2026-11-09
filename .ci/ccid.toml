@@ -10,6 +10,10 @@ commands = [["bash", ".ci/verify.sh"]]
 cache_tools = [["rustc", "-vV"], ["cargo", "--version"], ["python3", "--version"], ["rustup", "run", "nightly", "rustc", "-vV"], ["rustup", "run", "nightly", "cargo", "llvm-cov", "--version"]]
 cache_outputs = ["coverage.json", "coverage.lcov", "coverage.txt"]
 
+[checks.advisories]
+kind = "commands"
+commands = [["cargo", "deny", "--all-features", "check", "--warn", "unmaintained", "advisories"]]
+
 [render]
 render_schema = 2
 
@@ -17,7 +21,7 @@ render_schema = 2
 scheduler = "forgejo"
 runs_on = "heavy"
 events = ["push", "manual"]
-checks = ["verify"]
+checks = ["verify", "advisories"]
 workflow = "ci"
 command = ["bash", ".ci/run-cached.sh"]
 
@@ -25,6 +29,6 @@ command = ["bash", ".ci/run-cached.sh"]
 scheduler = "forgejo"
 runs_on = "light"
 events = ["pull_request"]
-checks = ["verify"]
+checks = ["verify", "advisories"]
 workflow = "pr"
 command = ["bash", ".ci/run-cached.sh"]
