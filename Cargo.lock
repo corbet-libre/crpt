@@ -531,7 +531,7 @@ dependencies = [
 [[package]]
 name = "cfbk"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cfbk?branch=main#0b0605dd1ab6179f5a47e65acef494ac5db7760d"
+source = "git+https://git.corbet.ch/corbet-libre/cfbk.git?branch=main#5f7dec374f967412b8ffa3ddae1e5a1762b8b5a4"
 
 [[package]]
 name = "cfg-if"
@@ -646,7 +646,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 [[package]]
 name = "cpmt"
 version = "0.2.0"
-source = "git+https://git.corbet.ch/corbet-foss/cpmt?branch=main#1c046615d40dbc4a1e3ad254fa26ed9500496843"
+source = "git+https://git.corbet.ch/corbet-libre/cpmt.git?branch=main#d4df7d6197ec823a177ab11b2aac8f441d85e36f"
 dependencies = [
  "base64 0.23.1",
  "cfbk",
